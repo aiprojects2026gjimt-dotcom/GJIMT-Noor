@@ -1,30 +1,26 @@
 
 "use strict";
 
-/* ==========================================
+/* =========================================
    GJIMT NOOR - GUEST WELCOME
-   Female Voice + Automatic Welcome
-   Three Guests + Continuous Slideshow
-========================================== */
+   Tablet-compatible voice and slideshow
+========================================= */
 
 const guests = [
   {
     name: "Captain Mantej Singh Cheema",
     honorific: "Sir",
-    designation: "Assistant Director of Youth Services",
-    organization: ""
+    designation: "Assistant Director of Youth Services, Mohali"
   },
   {
     name: "J.S. Bedi",
     honorific: "Sir",
-    designation: "Chairman",
-    organization: "Gian Jyoti Institute of Management and Technology"
+    designation: "Chairman, GJIMT"
   },
   {
     name: "Dr. Aneet Bedi",
     honorific: "Ma'am",
-    designation: "Director",
-    organization: "Gian Jyoti Institute of Management and Technology"
+    designation: "Director, GJIMT"
   }
 ];
 
@@ -38,48 +34,57 @@ const alertBox = document.getElementById("guestAlert");
 const progress = document.getElementById("guestProgress");
 
 const MIN_SLIDE_MS = 18000;
-const VOICE_WAIT_MS = 3500;
 
 let current = 0;
 let token = 0;
 let slideStart = 0;
 let slideTimer = null;
-let voiceWaitTimer = null;
-let chunkWatchdog = null;
+let voiceTimer = null;
+let speechTimer = null;
+
+let noorStopped = false;
+let audioEnabled = true;
+let speechBlocked = false;
+let activeUtterance = null;
 
 let ctx = null;
 let musicTimer = null;
 
-let noorStopped = false;
-let audioEnabled = true;
-let activeUtterance = null;
-let speechStarted = false;
-let speechBlocked = false;
-
-// NOOR introduces herself only once per page visit.
-let noorIntroduced = false;
-
-// Cross-tab guest announcement priority (same browser and website).
 const GUEST_AUDIO_KEY = "noorGuestAudioOwnerV1";
 const GUEST_AUDIO_TTL = 6000;
-const guestOwnerId = "guest-" + Date.now() + "-" + Math.random().toString(36).slice(2);
+
+const guestOwnerId =
+  "guest-" + Date.now() + "-" +
+  Math.random().toString(36).slice(2);
+
 let guestHeartbeat = null;
+
+/* =========================================
+   AUDIO PRIORITY
+========================================= */
 
 function claimGuestAudio() {
   if (document.hidden || noorStopped) return;
+
   try {
-    localStorage.setItem(GUEST_AUDIO_KEY, JSON.stringify({
-      id: guestOwnerId,
-      expires: Date.now() + GUEST_AUDIO_TTL
-    }));
+    localStorage.setItem(
+      GUEST_AUDIO_KEY,
+      JSON.stringify({
+        id: guestOwnerId,
+        expires: Date.now() + GUEST_AUDIO_TTL
+      })
+    );
   } catch (error) {
-    console.warn("Guest audio coordination unavailable:", error);
+    console.warn("Audio priority:", error);
   }
 }
 
 function releaseGuestAudio() {
   try {
-    const state = JSON.parse(localStorage.getItem(GUEST_AUDIO_KEY) || "null");
+    const state = JSON.parse(
+      localStorage.getItem(GUEST_AUDIO_KEY) || "null"
+    );
+
     if (state && state.id === guestOwnerId) {
       localStorage.removeItem(GUEST_AUDIO_KEY);
     }
@@ -88,8 +93,13 @@ function releaseGuestAudio() {
 
 function startGuestPriority() {
   claimGuestAudio();
+
   clearInterval(guestHeartbeat);
-  guestHeartbeat = setInterval(claimGuestAudio, 2000);
+
+  guestHeartbeat = setInterval(
+    claimGuestAudio,
+    2000
+  );
 }
 
 function stopGuestPriority() {
@@ -98,23 +108,25 @@ function stopGuestPriority() {
   releaseGuestAudio();
 }
 
-window.addEventListener("pagehide", stopGuestPriority);
+window.addEventListener(
+  "pagehide",
+  stopGuestPriority
+);
 
-
-/* ==========================================
-   FEMALE VOICE SELECTION
-========================================== */
+/* =========================================
+   FEMALE VOICE - TABLET COMPATIBLE
+========================================= */
 
 function preferredVoice() {
   if (!("speechSynthesis" in window)) {
     return null;
   }
 
-  const voices = speechSynthesis.getVoices();
+  const voices = speechSynthesis.getVoices() || [];
 
   if (!voices.length) return null;
 
-  const femaleNames = [
+  const preferred = [
     "Microsoft Neerja",
     "Microsoft Heera",
     "Microsoft Swara",
@@ -122,6 +134,7 @@ function preferredVoice() {
     "Google Hindi",
     "Veena",
     "Lekha",
+    "Google UK English Female",
     "Samantha",
     "Karen",
     "Moira",
@@ -129,60 +142,45 @@ function preferredVoice() {
     "Microsoft Zira"
   ];
 
-  for (const name of femaleNames) {
-    const voice = voices.find(v =>
+  for (const name of preferred) {
+    const found = voices.find(v =>
       v.name.toLowerCase().includes(
         name.toLowerCase()
       )
     );
 
-    if (voice) return voice;
+    if (found) return found;
   }
 
-  return voices.find(v =>
-    /female|woman/i.test(v.name)
-  ) || null;
+  // Same fallback approach as Dashboard.
+  // The default voice's gender depends on
+  // the tablet's installed speech engine.
+
+  return (
+    voices.find(v =>
+      /^(hi|en)[-_ ]?IN/i.test(v.lang) &&
+      /female|woman|neerja|heera|swara|veena|lekha/i
+        .test(v.name)
+    ) ||
+    voices.find(v =>
+      /female|woman|neerja|heera|swara|veena|lekha|samantha|karen|zira/i
+        .test(v.name)
+    ) ||
+    voices.find(v =>
+      /^hi[-_ ]?IN/i.test(v.lang)
+    ) ||
+    voices.find(v =>
+      /^en[-_ ]?IN/i.test(v.lang)
+    ) ||
+    voices.find(v => v.default) ||
+    voices[0] ||
+    null
+  );
 }
 
-/* ==========================================
-   LOAD VOICES BEFORE SPEAKING
-========================================== */
-
-function waitForFemaleVoice(callback, id) {
-  clearTimeout(voiceWaitTimer);
-
-  const startedAt = Date.now();
-
-  function check() {
-    if (id !== token || noorStopped) return;
-
-    const voice = preferredVoice();
-
-    if (voice) {
-      callback(voice);
-      return;
-    }
-
-    if (
-      Date.now() - startedAt >= VOICE_WAIT_MS
-    ) {
-      callback(null);
-      return;
-    }
-
-    voiceWaitTimer = setTimeout(check, 200);
-  }
-
-  if ("speechSynthesis" in window) {
-    speechSynthesis.getVoices();
-  }
-
-  check();
-}
-
-/* ==========================================
-   NOOR PRONUNCIATION
-========================================== */
+/* =========================================
+   PRONUNCIATION
+========================================= */
 
 function sayable(text) {
   return String(text)
@@ -192,10 +190,9 @@ function sayable(text) {
     .replace(/Sat Sri Akal/gi, "Sat Shree Akaal");
 }
 
-/* ==========================================
-   GUEST WELCOME MESSAGES
-========================================== */
-
+/* =========================================
+   THREE GUEST ANNOUNCEMENTS
+========================================= */
 
 function welcomeParts(guest) {
 
@@ -203,7 +200,7 @@ function welcomeParts(guest) {
     return [
       "Sat Shri Akal!",
       "NOOR warmly welcomes Captain Mantej Singh Cheema Sir.",
-      "Captain Mantej Singh Cheema Sir is Assistant Director of Youth Services.",
+      "Captain Mantej Singh Cheema Sir is Assistant Director of Youth Services, Mohali.",
       "Welcome to the Gian Jyoti Blood Donation Camp.",
       "Thank you for your presence and support."
     ];
@@ -212,7 +209,7 @@ function welcomeParts(guest) {
   if (guest.name === "J.S. Bedi") {
     return [
       "Sat Shri Akal!",
-      "NOOR warmly welcomes the Chairman of G J I M T, J.S. Bedi Sir.",
+      "NOOR is honoured to greet the esteemed Chairman of G J I M T, J.S. Bedi Sir.",
       "Welcome to the Gian Jyoti Blood Donation Camp.",
       "Thank you for your presence and support."
     ];
@@ -230,16 +227,13 @@ function welcomeParts(guest) {
   return [];
 }
 
-
-/* ==========================================
+/* =========================================
    BACKGROUND MUSIC
-========================================== */
+========================================= */
 
 function stopMusic() {
-  if (musicTimer) {
-    clearInterval(musicTimer);
-    musicTimer = null;
-  }
+  clearInterval(musicTimer);
+  musicTimer = null;
 }
 
 function startMusic() {
@@ -268,18 +262,14 @@ function startMusic() {
 
     const t = ctx.currentTime + 0.03;
 
-    for (
-      const [j, frequency] of
-      chords[n++ % chords.length].entries()
-    ) {
-      const oscillator =
-        ctx.createOscillator();
+    const chord = chords[n++ % chords.length];
 
+    chord.forEach((frequency, j) => {
+      const oscillator = ctx.createOscillator();
       const gain = ctx.createGain();
 
       oscillator.type = "sine";
-      oscillator.frequency.value =
-        frequency;
+      oscillator.frequency.value = frequency;
 
       gain.gain.setValueAtTime(
         0.0001,
@@ -301,10 +291,11 @@ function startMusic() {
 
       oscillator.start(t + j * 0.06);
       oscillator.stop(t + j * 0.06 + 3.05);
-    }
+    });
   }
 
   play();
+
   musicTimer = setInterval(play, 3300);
 }
 
@@ -327,27 +318,22 @@ function tryMusic() {
     } else {
       startMusic();
     }
-
   } catch (error) {
-    console.warn(
-      "NOOR music permission:",
-      error
-    );
+    console.warn("Music unavailable:", error);
   }
 }
 
-/* ==========================================
-   CLEAR SPEECH SAFELY
-========================================== */
+/* =========================================
+   CLEAR SPEECH
+========================================= */
 
 function clearSpeech() {
-  clearTimeout(chunkWatchdog);
-  clearTimeout(voiceWaitTimer);
+  clearTimeout(voiceTimer);
+  clearTimeout(speechTimer);
 
-  chunkWatchdog = null;
-  voiceWaitTimer = null;
+  voiceTimer = null;
+  speechTimer = null;
   activeUtterance = null;
-  speechStarted = false;
 
   if ("speechSynthesis" in window) {
     try {
@@ -358,17 +344,16 @@ function clearSpeech() {
   halo?.classList.remove("talking");
 }
 
-/* ==========================================
-   NEXT GUEST SLIDE
-========================================== */
+/* =========================================
+   NEXT SLIDE
+========================================= */
 
 function scheduleNext(id) {
   clearTimeout(slideTimer);
 
   const remaining = Math.max(
     1300,
-    MIN_SLIDE_MS -
-      (Date.now() - slideStart)
+    MIN_SLIDE_MS - (Date.now() - slideStart)
   );
 
   slideTimer = setTimeout(() => {
@@ -378,9 +363,9 @@ function scheduleNext(id) {
   }, remaining);
 }
 
-/* ==========================================
+/* =========================================
    NOOR SPEECH ENGINE
-========================================== */
+========================================= */
 
 function speak(id) {
   const guest = guests[current];
@@ -392,8 +377,9 @@ function speak(id) {
 
   if (alertBox) {
     alertBox.textContent =
-      "♥ NOOR welcomes " +
-      guest.name + " " + guest.honorific + "!";
+      "♥ NOOR greets " +
+      guest.name + " " +
+      guest.honorific + "!";
   }
 
   stopMusic();
@@ -403,6 +389,11 @@ function speak(id) {
     !audioEnabled ||
     !("speechSynthesis" in window)
   ) {
+    if (!("speechSynthesis" in window) && alertBox) {
+      alertBox.textContent =
+        "Speech synthesis unavailable in this browser";
+    }
+
     scheduleNext(id);
     return;
   }
@@ -415,7 +406,8 @@ function speak(id) {
 
     complete = true;
 
-    clearTimeout(chunkWatchdog);
+    clearTimeout(speechTimer);
+    clearTimeout(voiceTimer);
 
     halo?.classList.remove("talking");
 
@@ -430,28 +422,35 @@ function speak(id) {
       complete
     ) return;
 
-    clearTimeout(chunkWatchdog);
+    clearTimeout(speechTimer);
 
     if (partIndex >= parts.length) {
       finish();
       return;
     }
 
-    const text =
-      sayable(parts[partIndex++]);
+    const spokenText = sayable(
+      parts[partIndex++]
+    );
 
     const utterance =
-      new SpeechSynthesisUtterance(text);
+      new SpeechSynthesisUtterance(spokenText);
 
     activeUtterance = utterance;
 
-    utterance.voice = voice;
-    utterance.lang = voice.lang;
-    utterance.rate = 0.95;
+    if (voice) {
+      utterance.voice = voice;
+      utterance.lang = voice.lang || "hi-IN";
+    } else {
+      utterance.lang = "hi-IN";
+    }
+
+    utterance.rate = 1.02;
     utterance.pitch = 1.10;
     utterance.volume = 1;
 
     let settled = false;
+    let started = false;
 
     function advance() {
       if (
@@ -461,7 +460,7 @@ function speak(id) {
       ) return;
 
       settled = true;
-      clearTimeout(chunkWatchdog);
+      clearTimeout(speechTimer);
 
       nextPart(voice);
     }
@@ -469,13 +468,8 @@ function speak(id) {
     utterance.onstart = () => {
       if (id !== token) return;
 
-      speechStarted = true;
+      started = true;
       speechBlocked = false;
-
-      // Mark introduction complete when speech begins.
-      if (!noorIntroduced) {
-        noorIntroduced = true;
-      }
 
       halo?.classList.add("talking");
     };
@@ -498,9 +492,7 @@ function speak(id) {
 
         if (alertBox) {
           alertBox.textContent =
-            "♥ Welcome " +
-            guest.name +
-            " • Tap Repeat / Resume NOOR to enable sound";
+            "Tap Repeat / Resume NOOR to enable voice";
         }
 
         finish();
@@ -517,14 +509,17 @@ function speak(id) {
       advance();
     };
 
-    chunkWatchdog = setTimeout(() => {
+    // Prevent the slideshow from getting stuck
+    // if the tablet's speech engine never starts.
+
+    speechTimer = setTimeout(() => {
       if (
         id !== token ||
         settled ||
         complete
       ) return;
 
-      if (!speechStarted) {
+      if (!started) {
         speechBlocked = true;
 
         if (alertBox) {
@@ -547,27 +542,40 @@ function speak(id) {
       speechSynthesis.resume();
       speechSynthesis.speak(utterance);
     } catch (error) {
-      console.warn(error);
-      advance();
+      console.warn(
+        "NOOR could not speak:",
+        error
+      );
+
+      speechBlocked = true;
+      finish();
     }
   }
 
-  waitForFemaleVoice(voice => {
+  // Wait briefly for Android voices to load.
+  // Unlike the previous version, NOOR can
+  // still try the default speech engine.
+
+  const startedAt = Date.now();
+
+  function waitForVoice() {
     if (id !== token || noorStopped) return;
 
-    if (!voice) {
-      if (alertBox) {
-        alertBox.textContent =
-          "Female NOOR voice not available on this device";
-      }
+    const voices =
+      speechSynthesis.getVoices() || [];
 
-      console.warn(
-        "No recognized female speech voice is installed."
+    if (
+      !voices.length &&
+      Date.now() - startedAt < 4000
+    ) {
+      voiceTimer = setTimeout(
+        waitForVoice,
+        250
       );
-
-      finish();
       return;
     }
+
+    const voice = preferredVoice();
 
     try {
       speechSynthesis.cancel();
@@ -575,12 +583,14 @@ function speak(id) {
     } catch (error) {}
 
     nextPart(voice);
-  }, id);
+  }
+
+  waitForVoice();
 }
 
-/* ==========================================
-   DISPLAY GUEST SLIDE
-========================================== */
+/* =========================================
+   SHOW GUEST
+========================================= */
 
 function show(index) {
   current =
@@ -614,14 +624,16 @@ function show(index) {
   speak(token);
 }
 
-/* ==========================================
+/* =========================================
    REPEAT / RESUME NOOR
-========================================== */
+========================================= */
 
 function resumeNoor() {
   noorStopped = false;
   audioEnabled = true;
   speechBlocked = false;
+
+  startGuestPriority();
 
   if ("speechSynthesis" in window) {
     try {
@@ -631,32 +643,34 @@ function resumeNoor() {
     } catch (error) {}
   }
 
-  startGuestPriority();
+  // This runs after the user's tap,
+  // which helps unlock tablet audio.
   tryMusic();
+
   show(current);
 }
 
-/* ==========================================
-   PREVIOUS GUEST
-========================================== */
+/* =========================================
+   PREVIOUS GUEST BUTTON
+========================================= */
 
 document.getElementById("prevGuest")
   ?.addEventListener("click", () => {
     show(current - 1);
   });
 
-/* ==========================================
-   NEXT GUEST
-========================================== */
+/* =========================================
+   NEXT GUEST BUTTON
+========================================= */
 
 document.getElementById("nextGuest")
   ?.addEventListener("click", () => {
     show(current + 1);
   });
 
-/* ==========================================
+/* =========================================
    REPEAT BUTTON
-========================================== */
+========================================= */
 
 document.getElementById("repeatWelcome")
   ?.addEventListener(
@@ -664,14 +678,15 @@ document.getElementById("repeatWelcome")
     resumeNoor
   );
 
-/* ==========================================
+/* =========================================
    STOP NOOR BUTTON
-========================================== */
+========================================= */
 
 document.getElementById("stopNoor")
   ?.addEventListener("click", () => {
     noorStopped = true;
     audioEnabled = false;
+
     stopGuestPriority();
 
     token++;
@@ -691,48 +706,61 @@ document.getElementById("stopNoor")
     scheduleNext(token);
   });
 
-/* ==========================================
+/* =========================================
    PAGE VISIBILITY
-========================================== */
+========================================= */
 
 document.addEventListener(
   "visibilitychange",
   () => {
     if (document.hidden) {
       stopGuestPriority();
+
       token++;
 
       clearSpeech();
       stopMusic();
       clearTimeout(slideTimer);
-
     } else {
-      if (!noorStopped) startGuestPriority();
+      if (!noorStopped) {
+        startGuestPriority();
+      }
+
       show(current);
     }
   }
 );
 
-/* ==========================================
-   AUTOMATIC WELCOME ON PAGE LOAD
-========================================== */
+/* =========================================
+   TABLET TAP-TO-ENABLE FALLBACK
+========================================= */
 
-function autoWelcome() {
-  startGuestPriority();
-  if ("speechSynthesis" in window) {
-    try {
-      speechSynthesis.getVoices();
-      speechSynthesis.resume();
-    } catch (error) {}
-  }
+document.addEventListener(
+  "pointerdown",
+  event => {
+    if (
+      document.hidden ||
+      noorStopped ||
+      !speechBlocked
+    ) return;
 
-  tryMusic();
-  show(0);
-}
+    const target = event.target;
 
-/* ==========================================
-   BROWSER VOICE INITIALIZATION
-========================================== */
+    if (
+      target instanceof Element &&
+      target.closest(
+        "#stopNoor, #repeatWelcome, #prevGuest, #nextGuest, a"
+      )
+    ) return;
+
+    resumeNoor();
+  },
+  { passive: true }
+);
+
+/* =========================================
+   INITIALIZE VOICES
+========================================= */
 
 if ("speechSynthesis" in window) {
   speechSynthesis.getVoices();
@@ -748,17 +776,27 @@ if ("speechSynthesis" in window) {
   );
 }
 
-// If the browser blocked automatic speech, a tap/click on the guest page
-// retries the same welcome using a real user gesture.
-document.addEventListener("pointerdown", event => {
-  if (document.hidden || noorStopped || !speechBlocked) return;
-  if (event.target.closest("#stopNoor, #repeatWelcome, #prevGuest, #nextGuest, a")) return;
-  resumeNoor();
-}, { passive: true });
+/* =========================================
+   AUTOMATIC WELCOME
+========================================= */
 
-/* ==========================================
-   START ON PAGE LOAD
-========================================== */
+function autoWelcome() {
+  startGuestPriority();
+
+  if ("speechSynthesis" in window) {
+    try {
+      speechSynthesis.getVoices();
+      speechSynthesis.resume();
+    } catch (error) {}
+  }
+
+  tryMusic();
+  show(0);
+}
+
+/* =========================================
+   START PAGE
+========================================= */
 
 if (document.readyState === "loading") {
   document.addEventListener(
