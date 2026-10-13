@@ -213,7 +213,7 @@ function welcomeParts(guest) {
     return [
       "Sat Shri Akal!",
       "NOOR warmly welcomes the Chairman of G J I M T, J.S. Bedi Sir.",
-      "Welcome to the Gian Jyoti Blood Donation Camp."
+      "Welcome to the Gian Jyoti Blood Donation Camp.",
       "Thank you for your presence and support."
     ];
   }
